@@ -1,4 +1,4 @@
-const db = require("../config/db");
+const { db } = require("../config/db");
 
 const { ObjectId } = require("mongodb");
 
@@ -21,6 +21,7 @@ const createAppeal = async (req, res) => {
     const newAppeal = {
       title,
       description,
+      status: APPEAL_STATUSES.NEW,
       createdAt: new Date(),
     };
 
@@ -38,46 +39,90 @@ const createAppeal = async (req, res) => {
 
 const getAppeals = async (req, res) => {
   try {
-    const { date, startDate, endDate, status } = req.query;
+    const {
+      date,
+      startDate,
+      endDate,
+      status,
+      limit = 50,
+      page = 1,
+    } = req.query;
     const query = {};
+
+    if (date && (startDate || endDate)) {
+      return res
+        .status(400)
+        .json({ error: 'Cannot combine "date" with "startDate" or "endDate"' });
+    }
 
     if (date) {
       const targetDate = new Date(date);
       if (isNaN(targetDate)) {
         return res.status(400).json({ error: "Invalid format of date" });
       }
-      query.createdAt = {
-        $gte: new Date(targetDate.setHours(0, 0, 0, 0)),
-        $lte: new Date(targetDate.setHours(23, 59, 59, 999)),
-      };
+      const startOfDay = new Date(targetDate);
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(targetDate);
+      endOfDay.setHours(23, 59, 59, 999);
+      query.createdAt = { $gte: startOfDay, $lte: endOfDay };
     }
 
-    if (startDate && endDate) {
+    if (startDate || endDate) {
+      if (!startDate || !endDate) {
+        return res.status(400).json({
+          error:
+            'Both "startDate" and "endDate" are required for range filtering',
+        });
+      }
       const start = new Date(startDate);
       const end = new Date(endDate);
       if (isNaN(start) || isNaN(end)) {
+        return res.status(400).json({ error: "Invalid format of date range" });
+      }
+      if (start > end) {
         return res
           .status(400)
-          .json({ error: "Invalid format of interval of dates" });
+          .json({ error: '"startDate" must be before "endDate"' });
       }
-      query.createdAt = {
-        $gte: start,
-        $lte: end,
-      };
+      query.createdAt = { $gte: start, $lte: end };
     }
 
-    if (status && Object.values(APPEAL_STATUSES).includes(status)) {
+    if (status) {
+      if (!Object.values(APPEAL_STATUSES).includes(status)) {
+        return res.status(400).json({
+          error: `Invalid status. Must be one of: ${Object.values(
+            APPEAL_STATUSES
+          ).join(", ")}`,
+        });
+      }
       query.status = status;
     }
+
+    const limitNum = Math.min(parseInt(limit, 10), 100);
+    const pageNum = Math.max(parseInt(page, 10), 1);
+    const skip = (pageNum - 1) * limitNum;
 
     const appeals = await db
       .collection("appeals")
       .find(query)
       .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limitNum)
       .toArray();
 
-    res.status(400).json(appeals);
+    const total = await db.collection("appeals").countDocuments(query);
+
+    res.status(200).json({
+      appeals,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        pages: Math.ceil(total / limitNum),
+      },
+    });
   } catch (error) {
+    console.error("Error fetching appeals:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 };
@@ -181,10 +226,10 @@ const cancelAllAppealsWithInProgressStatus = async (req, res) => {
 };
 
 module.exports = {
-    createAppeal,
-    getAppeals,
-    workOnAppeal,
-    completeAppeal,
-    cancelAppeal,
-    cancelAllAppealsWithInProgressStatus,
-}
+  createAppeal,
+  getAppeals,
+  workOnAppeal,
+  completeAppeal,
+  cancelAppeal,
+  cancelAllAppealsWithInProgressStatus,
+};
