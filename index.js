@@ -8,7 +8,11 @@ const PORT = process.env.PORT || 3000;
 
 const appealsRoute = require("./routes/appealsRoute");
 
+const { swaggerUi, specs } = require("./config/swagger");
+
 app.use(express.json());
+
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(specs));
 
 app.use("/api", appealsRoute);
 
